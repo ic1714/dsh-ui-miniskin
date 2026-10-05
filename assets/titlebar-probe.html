@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>titlebar probe</title>
+<!--
+  标题栏"系统按钮底色"自检页（自包含）。
+
+  背景：Windows 上 Electron 用 `titleBarStyle:"hidden"` + `titleBarOverlay`，
+  右上角那三个系统按钮画在网页**上面**。宿主 preload 会插入一个隐藏探针 span，
+  读出它的 getComputedStyle 并经 IPC 交给主进程设置标题栏底色：
+
+      probe.style.cssText = "position:fixed;visibility:hidden;pointer-events:none;
+                             background-color:var(--dsw-specific-sidebar-fill);
+                             color:var(--dsw-alias-label-primary)"
+
+  所以：只要控制 `--dsw-specific-sidebar-fill`，就能控制按钮底下的那层颜色。
+  这个页面用**完全相同的读法**把实际会交给主进程的颜色算出来，直接给结论。
+
+  下半部分还按真实顺序复刻了本插件的注入链（宿主令牌 → 绘制前脚本 → 前端样式表），
+  用来验证"启动动画期间钉色、结束后交还"这条规则在级联里站得住。
+-->
+<style>
+  /* ── 第 1 段：宿主主题令牌（取自 DSH 主题 CSS 的真实定义，深色档） ── */
+  body {
+    --dsw-specific-sidebar-fill: #1b1b1c;
+    --dsw-alias-label-primary: #f9fafb;
+    --dsw-alias-bg-base: transparent;
+    --dsw-alias-bg-layer-1: transparent;
+    --dsw-alias-bg-layer-2: transparent;
+    --dsw-alias-bg-layer-3: transparent;
+  }
+  /* 深色档的特异性更高（宿主就是这么写的），覆盖必须用同样特异性 */
+  body[data-ds-dark-theme] {
+    --dsw-specific-sidebar-fill: #1b1b1c;
+    --dsw-alias-label-primary: #f9fafb;
+  }
+
+  /* ── 第 2 段：本插件「绘制前脚本」生成的样式（与 lib/index.js 保持一致） ──
+       关键 1：钉在标题栏上的颜色必须**等于动画顶部的合成色**，否则按钮会坐在
+               一块颜色不同的色块上。下面渐变顶部中央正是 #161b2f。
+       关键 2：必须钉在 **body** 上。宿主的主题令牌定义在 `body{...}` /
+               `body[data-ds-dark-theme]{...}` 里，子元素继承的是 body 的值 ——
+               只写 `html[...]` 会被 body 的定义直接盖掉（第一版就是这么翻车的）。
+       关键 3：**无条件钉深色**。启动动画永远是深蓝底，按钮底色必须跟动画走、
+               不跟系统主题走 —— 浅色系统 + 深色动画 = 浅色按钮条，等于没修。 */
+  html[data-dshb-splash="1"] body{--dsw-specific-sidebar-fill:#161b2f;--dsw-alias-label-primary:#f9fafb}
+  html[data-dshb-splash="1"] body[data-ds-dark-theme]{--dsw-specific-sidebar-fill:#161b2f;--dsw-alias-label-primary:#f9fafb}
+  html[data-dshb] body{background:#0f1115!important}
+  html[data-dshb][data-dshb-dark="1"] body{background:#080a10!important}
+
+  /* 启动动画本体（用于对比条带颜色与渐变顶部是否一致）。
+     注意这里用 absolute 而不是 fixed —— 真实实现里是 fixed 铺满视口，
+     但这页只是拿一块 110px 高的框做预览，fixed 会盖住整页。 */
+  #dshb-splash{
+    position:absolute; inset:0; z-index:1;
+    background:radial-gradient(1100px 720px at 50% 18%,#2a3560 0%,#151a2c 46%,#0c0e16 100%);
+  }
+  #dshb-splash::before{
+    content:""; position:absolute; left:0; right:0; top:0; height:40px;
+    background:#161b2f;
+  }
+
+  /* ── 第 3 段：本插件「壁纸内嵌」档对宿主表面的覆盖（逐字一致） ──
+       注意它把侧栏底色变成带 alpha 的颜色 —— 标题栏读的就是这个变量，
+       所以启动动画期间必须靠第 2 段钉住，否则标题栏会跟着变半透明。 */
+  html[data-dshb-wall="1"] body[class*="sidebarCol"]{
+    --dsw-specific-sidebar-fill:transparent !important;
+    background-color:rgba(10,12,18,calc(var(--dshb-a) * 0.92)) !important;
+  }
+</style>
+
+<style>
+  /* 页面自身外观 */
+  body { margin: 0; padding: 24px; color: #e9edf7; min-height: 100vh;
+         font: 14px/1.75 system-ui, "Microsoft YaHei", sans-serif; }
+  h1 { font-size: 16px; margin: 0 0 6px; }
+  h2 { font-size: 14px; margin: 22px 0 6px; color: #9ecbff; }
+  table { border-collapse: collapse; margin-top: 6px; }
+  td, th { border: 1px solid rgba(255,255,255,.18); padding: 3px 10px; text-align: left;
+           font-variant-numeric: tabular-nums; }
+  th { color: rgba(233,237,247,.7); font-weight: 500; }
+  code { color: #9ecbff; }
+  .ok { color: #4ed17e; font-weight: 600; }
+  .bad { color: #f25a5a; font-weight: 600; }
+  .swatch { display: inline-block; width: 20px; height: 12px; vertical-align: -1px;
+            border: 1px solid rgba(255,255,255,.35); margin-right: 6px; }
+  .note { color: rgba(233,237,247,.6); font-size: 12px; }
+</style>
+</head>
+<body data-ds-dark-theme>
+<!-- 复刻宿主侧栏：它带着壁纸内嵌档的覆盖规则 -->
+<div class="BynINW_sidebarCol" style="height:0;overflow:hidden"></div>
+
+<h1>标题栏「系统按钮底色」自检</h1>
+<p class="note">用与宿主 preload 完全相同的读法，算出实际会经 IPC 交给主进程的颜色。</p>
+<p class="note">期望：启动动画期间标题栏底色应为 <b>不透明</b>且与动画顶部条带<b>完全同色</b> ——
+  两者一致，三个系统按钮才会"沉"进动画里；不一致就会坐在一块颜色不同的色块上。</p>
+<div style="position:relative;height:110px;border:1px solid rgba(255,255,255,.2);overflow:hidden;border-radius:6px">
+  <div id="dshb-splash"></div>
+</div>
+<p class="note">↑ 预览：顶部 40px 是条带、下面是启动动画渐变。交界处应当看不出色差
+  —— 因为是同一套颜色（<code>#161b2f</code> 接 <code>#161b2f</code>）。</p>
+
+<h2>① 启动动画期间（<code>html[data-dshb-splash="1"]</code>）</h2>
+<table id="out1"></table>
+<p id="verdict1"></p>
+
+<h2>② 启动动画结束后（属性已移除）</h2>
+<table id="out2"></table>
+<p id="verdict2"></p>
+
+<script>
+(function () {
+  'use strict'
+  var root = document.documentElement
+
+  // 与宿主 preload 逐字一致的内联样式
+  function makeProbe() {
+    var probe = document.createElement('span')
+    probe.style.cssText =
+      'position:fixed;visibility:hidden;pointer-events:none;' +
+      'background-color:var(--dsw-specific-sidebar-fill);' +
+      'color:var(--dsw-alias-label-primary)'
+    document.body.appendChild(probe)
+    return probe
+  }
+
+  var canvas = document.createElement('canvas')
+  canvas.width = canvas.height = 1
+  var ctx = canvas.getContext('2d', { willReadFrequently: true })
+
+  /** preload 的做法：经 canvas 归一化成 rgba() 再交给主进程 */
+  function nativeColor(color) {
+    ctx.clearRect(0, 0, 1, 1)
+    ctx.fillStyle = color
+    ctx.fillRect(0, 0, 1, 1)
+    var d = ctx.getImageData(0, 0, 1, 1).data
+    return 'rgba(' + d[0] + ', ' + d[1] + ', ' + d[2] + ', ' + (d[3] / 255) + ')'
+  }
+
+  function swatch(color) {
+    var s = document.createElement('span')
+    s.className = 'swatch'
+    s.style.background = color
+    return s
+  }
+
+  function render(probe, tableId, verdictId, tag) {
+    var cs = getComputedStyle(probe)
+    var bg = nativeColor(cs.backgroundColor)
+    var fg = nativeColor(cs.color)
+    var rows = [
+      ['阶段', tag],
+      ['data-dshb-splash', String(root.getAttribute('data-dshb-splash'))],
+      ['data-dshb-dark', String(root.getAttribute('data-dshb-dark'))],
+      ['--dsw-specific-sidebar-fill',
+        getComputedStyle(root).getPropertyValue('--dsw-specific-sidebar-fill').trim() || '(空)'],
+      ['--dsw-alias-label-primary',
+        getComputedStyle(root).getPropertyValue('--dsw-alias-label-primary').trim() || '(空)'],
+      ['标题栏底色 color', bg, true],
+      ['按钮符号色 symbolColor', fg, true],
+    ]
+    var t = document.getElementById(tableId)
+    t.innerHTML = ''
+    for (var i = 0; i < rows.length; i++) {
+      var tr = document.createElement('tr')
+      var th = document.createElement('th')
+      th.textContent = rows[i][0]
+      var td = document.createElement('td')
+      if (rows[i][2]) td.appendChild(swatch(rows[i][1]))
+      td.appendChild(document.createTextNode(rows[i][1]))
+      tr.appendChild(th)
+      tr.appendChild(td)
+      t.appendChild(tr)
+    }
+
+    var opaque = /, 1\)$/.test(bg)
+    var v = document.getElementById(verdictId)
+    if (tag.indexOf('期间') >= 0) {
+      // 启动动画期间：必须不透明，否则标题栏会半透明、按钮显得浮在渐变上
+      v.className = opaque ? 'ok' : 'bad'
+      v.textContent = opaque
+        ? '✅ 标题栏会收到不透明色 ' + bg + ' —— 钉色生效，按钮会坐在启动动画的标题栏条带上'
+        : '❌ 标题栏收到带透明度的 ' + bg + ' —— 钉色没生效（按钮会浮在渐变上）'
+    } else {
+      // 动画结束后：应当交还给宿主（此例中宿主值本身就是不透明色）
+      v.className = opaque ? 'ok' : 'bad'
+      v.textContent = opaque
+        ? '✅ 已交还给宿主：' + bg
+        : '⚠️ 交还后仍是半透明 ' + bg + '（宿主在壁纸内嵌档下侧栏本就是半透明，属预期）'
+    }
+  }
+
+  // ① 启动动画期间
+  root.setAttribute('data-dshb', '1')
+  root.setAttribute('data-dshb-dark', '1')
+  root.setAttribute('data-dshb-wall', '1')
+  root.setAttribute('data-dshb-splash', '1')
+  var probe1 = makeProbe()
+  render(probe1, 'out1', 'verdict1', '启动动画期间')
+
+  // ② 启动动画结束后（真实流程里 splash 属性与探针都会移除）
+  var probe2 = makeProbe()
+  root.removeAttribute('data-dshb-splash')
+  setTimeout(function () {
+    render(probe2, 'out2', 'verdict2', '启动动画结束后')
+  }, 60)
+})()
+</script>
+</body>
+</html>

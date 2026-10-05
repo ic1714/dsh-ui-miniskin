@@ -1,0 +1,17 @@
+# 依赖与构建产物
+node_modules/
+.pnpm/
+
+# 运行时产物
+.tmp/
+*.log
+
+# 本机截图 / 调试输出
+shots/
+*.png
+*.jpg
+
+# 系统文件
+Thumbs.db
+Desktop.ini
+.DS_Store
