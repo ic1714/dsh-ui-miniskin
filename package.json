@@ -27,5 +27,10 @@
       ]
     }
   },
+  "author": "ic1714",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ic1714/dsh-ui-miniskin.git"
+  },
   "license": "MIT"
 }

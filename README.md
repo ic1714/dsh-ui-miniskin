@@ -17,8 +17,8 @@ DSH 界面美化插件：**启动动画** + **界面壁纸**。
 ## 1. 安装
 
 ```powershell
-# 克隆到本地（把 <用户名> 换成实际 GitHub 用户名）
-git clone https://github.com/<用户名>/dsh-ui-miniskin.git
+# 克隆到本地
+git clone https://github.com/ic1714/dsh-ui-miniskin.git
 
 # 用软链装进你的 profile（改源码立即生效；也可以把路径换成 npm 包名）
 dsh plugin --profile desktop add link:<克隆后的目录绝对路径>
